@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import { Check, ChevronRight, ChevronLeft, BedDouble, Send } from "lucide-react";
 
 // ─── Huisstijl: blauw / wit / rood ───
@@ -170,6 +170,7 @@ export default function Configurator() {
   const [step, setStep] = useState(0);
   const [cfg, setCfg] = useState({ type: null, maat: null, matras: null, hardheid: null, topper: null, hoofdbord: null, poten: null, stofgroep: null, toebehoren: [] });
   const [klant, setKlant] = useState({ naam: "", email: "", tel: "" });
+  const [klantId, setKlantId] = useState(null);
   const [verzonden, setVerzonden] = useState(false);
   const [bezig, setBezig] = useState(false);
   const [bcResultaat, setBcResultaat] = useState(null);
@@ -183,6 +184,7 @@ export default function Configurator() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           klant: { naam: klant.naam, email: klant.email, tel: klant.tel },
+          klantId: klantId || null,
           regels: regels.map((r) => ({ omschrijving: r.label, aantal: 1, prijs: r.prijs })),
         }),
       });
@@ -192,7 +194,55 @@ export default function Configurator() {
     } catch (e) { setBcFout(e.message); }
     finally { setBezig(false); }
   };
-  const [mode, setMode] = useState("collectie");
+  const [mode, setMode] = useState("klant"); // klant → collectie → config
+  const [klantModus, setKlantModus] = useState(null); // "nieuw" | "bestaand"
+  const [zoekterm, setZoekterm] = useState("");
+  const [zoekResultaten, setZoekResultaten] = useState([]);
+  const [zoekBezig, setZoekBezig] = useState(false);
+  const zoekTimer = useRef(null);
+
+  const zoekKlanten = (term) => {
+    setZoekterm(term);
+    clearTimeout(zoekTimer.current);
+    if (term.length < 2) { setZoekResultaten([]); return; }
+    setZoekBezig(true);
+    zoekTimer.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/customers?q=${encodeURIComponent(term)}`);
+        const data = await res.json();
+        setZoekResultaten(Array.isArray(data) ? data : []);
+      } catch { setZoekResultaten([]); }
+      finally { setZoekBezig(false); }
+    }, 400);
+  };
+
+  const kiesBestaandeKlant = (k) => {
+    setKlant({ naam: k.displayName, email: k.email || "", tel: k.phoneNumber || "" });
+    setKlantId(k.id);
+    setMode("collectie");
+    setKlantModus(null);
+    setZoekterm(""); setZoekResultaten([]);
+  };
+
+  const [nieuwBezig, setNieuwBezig] = useState(false);
+  const [nieuwFout, setNieuwFout] = useState(null);
+  const maakNieuweKlant = async () => {
+    if (!klant.naam) { setNieuwFout("Vul je naam in."); return; }
+    setNieuwBezig(true); setNieuwFout(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/customers`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ naam: klant.naam, email: klant.email, tel: klant.tel }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Onbekende fout");
+      setKlantId(data.id);
+      setMode("collectie");
+      setKlantModus(null);
+    } catch (e) { setNieuwFout(e.message); }
+    finally { setNieuwBezig(false); }
+  };
   const [picked, setPicked] = useState(null);
   const [zoom, setZoom] = useState(false);
   const [base, setBase] = useState(COLLECTIE[0]);
@@ -250,6 +300,75 @@ export default function Configurator() {
       ...cfg.toebehoren.map((id) => ({ itemNumber: id.toUpperCase(), description: find(O.toebehoren, id).label, quantity: 1, unitPrice: find(O.toebehoren, id).prijs })),
     ] },
   }), [klant, omschrijving, totaal, cfg.toebehoren, base]);
+
+  if (mode === "klant") {
+    return (
+      <div style={{ background: C.bg, minHeight: "100%" }} className="w-full">
+        <style>{`@import url('https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700;800&display=swap'); *{font-family:'Figtree',ui-sans-serif,system-ui,sans-serif;} .ff-display{font-weight:800;letter-spacing:-0.01em;} .btn-cta{background:#D81E27;transition:background .18s ease;} .btn-cta:hover{background:#B5151D;}`}</style>
+        <div style={{ background: B, color: "#fff" }} className="px-5 md:px-10 py-5 flex items-center gap-3">
+          <img src={LOGO} alt="Boxspring Slaapcomfort" className="w-10 h-10 rounded-full bg-white" />
+          <div><div className="ff-display text-lg leading-none">Boxspring Slaapcomfort</div>
+            <div style={{ color: "rgba(255,255,255,0.75)" }} className="text-[11px] tracking-[0.2em] uppercase mt-1">Welkom</div></div>
+        </div>
+
+        <div className="px-5 md:px-10 py-10 max-w-lg">
+          <h2 style={{ color: B }} className="ff-display text-3xl mb-1">Bent u al klant bij ons?</h2>
+          <p style={{ color: C.muted }} className="text-sm mb-8">Zo staat uw offerte direct op naam.</p>
+
+          {!klantModus && (
+            <div className="flex gap-3">
+              <button onClick={() => setKlantModus("bestaand")} style={{ background: C.surface, borderColor: B, color: B }} className="flex-1 rounded-2xl border-2 py-5 font-bold text-xl hover:bg-[#EAEFFA] transition-colors">Ja</button>
+              <button onClick={() => setKlantModus("nieuw")} style={{ background: R, color: "#fff" }} className="btn-cta flex-1 rounded-2xl py-5 font-bold text-xl">Nee</button>
+            </div>
+          )}
+
+          {klantModus === "bestaand" && (
+            <div>
+              <input autoFocus value={zoekterm} onChange={(e) => zoekKlanten(e.target.value)}
+                placeholder="Typ uw naam of e-mailadres…"
+                style={{ borderColor: C.line, background: C.surface, color: C.text }}
+                className="w-full rounded-xl border-2 px-4 py-3 text-base outline-none focus:border-[#1E3C8E] mb-3" />
+              {zoekBezig && <div style={{ color: C.muted }} className="text-sm mb-2">Zoeken…</div>}
+              {!zoekBezig && zoekterm.length >= 2 && zoekResultaten.length === 0 && (
+                <div style={{ color: C.muted }} className="text-sm mb-4">Niet gevonden.
+                  <button onClick={() => setKlantModus("nieuw")} style={{ color: B }} className="ml-2 font-bold underline">Als nieuw verdergaan</button>
+                </div>
+              )}
+              {zoekResultaten.length > 0 && (
+                <div style={{ borderColor: C.line }} className="rounded-xl border-2 overflow-hidden mb-4">
+                  {zoekResultaten.map((k) => (
+                    <button key={k.id} onClick={() => kiesBestaandeKlant(k)}
+                      style={{ borderColor: C.line, background: C.surface }}
+                      className="w-full text-left px-4 py-3.5 border-b last:border-b-0 hover:bg-[#EAEFFA] transition-colors">
+                      <div style={{ color: C.text }} className="font-bold">{k.displayName}</div>
+                      <div style={{ color: C.muted }} className="text-xs mt-0.5">{k.email}{k.phoneNumber ? ` · ${k.phoneNumber}` : ""}</div>
+                    </button>
+                  ))}
+                </div>
+              )}
+              <button onClick={() => setKlantModus(null)} style={{ color: C.muted }} className="text-sm underline">← Terug</button>
+            </div>
+          )}
+
+          {klantModus === "nieuw" && (
+            <div className="space-y-3">
+              {[["naam","Naam *"],["email","E-mailadres"],["tel","Telefoonnummer"]].map(([k,ph]) => (
+                <input key={k} placeholder={ph} value={klant[k]} onChange={(e) => setKlant((c) => ({ ...c, [k]: e.target.value }))}
+                  style={{ borderColor: C.line, background: C.surface, color: C.text }}
+                  className="w-full rounded-xl border-2 px-4 py-3 text-base outline-none focus:border-[#1E3C8E]" />
+              ))}
+              {nieuwFout && <p style={{ color: R }} className="text-sm font-bold">{nieuwFout}</p>}
+              <button onClick={maakNieuweKlant} disabled={nieuwBezig || !klant.naam} style={{ color: "#fff", opacity: klant.naam && !nieuwBezig ? 1 : 0.5 }}
+                className="btn-cta w-full rounded-xl py-3.5 font-bold flex items-center justify-center gap-2 disabled:cursor-not-allowed">
+                {nieuwBezig ? "Bezig…" : "Starten met samenstellen →"}
+              </button>
+              <button onClick={() => setKlantModus(null)} style={{ color: C.muted }} className="text-sm underline w-full text-center">← Terug</button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   if (mode === "collectie") {
     return (
